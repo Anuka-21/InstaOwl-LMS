@@ -168,9 +168,9 @@ def ask_gemini(messages: list[dict[str, str]]):
 
     return response.text.strip()
 
-def ask_gemini_stream(messages: list[dict[str, str]]):
+def ask_gemini_stream(messages):
 
-    response_stream = _client().models.generate_content_stream(
+    response = _client().models.generate_content(
         model=MODEL,
         contents=_to_contents(messages),
         config=types.GenerateContentConfig(
@@ -178,9 +178,7 @@ def ask_gemini_stream(messages: list[dict[str, str]]):
         ),
     )
 
-    for chunk in response_stream:
-        if getattr(chunk, "text", None):
-            yield chunk.text
+    yield response.text
 
 def _fallback_quiz(topic: str, difficulty: str, questions: int) -> list[dict[str, object]]:
     topic = topic.strip() or "General Knowledge"

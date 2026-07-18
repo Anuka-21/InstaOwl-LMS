@@ -1,3 +1,4 @@
+import streamlit as st
 import json
 import os
 import re
@@ -32,22 +33,34 @@ class AIServiceError(RuntimeError):
     """Raised when the hosted AI service is unavailable."""
 
 
+def get_api_key():
+    """Read API key from Streamlit Cloud Secrets or local .env"""
+    try:
+        if "GEMINI_API_KEY" in st.secrets:
+            return st.secrets["GEMINI_API_KEY"]
+    except Exception:
+        pass
+
+    return os.getenv("GEMINI_API_KEY")
+
+
 def get_ai_status() -> tuple[bool, str]:
     if genai is None or types is None:
-        return False, "Install dependencies to enable Gemini (`pip install -r requirements.txt`)."
+        return False, "Gemini SDK is not installed."
 
-    if not os.getenv("GEMINI_API_KEY"):
-        return False, "Add `GEMINI_API_KEY` to `.env` to enable Gemini."
+    if not get_api_key():
+        return False, "Gemini API key not configured."
 
-    return True, "Gemini is configured."
+    return True, "Gemini connected."
 
 
 def _client():
     ready, message = get_ai_status()
+
     if not ready:
         raise AIServiceError(message)
 
-    return genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    return genai.Client(api_key=get_api_key())
 
 
 def _to_contents(messages: list[dict[str, str]]):
@@ -143,39 +156,31 @@ def _generate_text(prompt: str, *, json_mode: bool = False) -> str:
     return (response.text or "").strip()
 
 
-def ask_gemini(messages: list[dict[str, str]]) -> str:
-    try:
-        response = _client().models.generate_content(
-            model=MODEL,
-            contents=_to_contents(messages),
-            config=types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT),
-        )
-        return (response.text or "").strip() or _fallback_tutor_reply(_latest_user_text(messages))
-    except Exception:
-        return _fallback_tutor_reply(_latest_user_text(messages))
+def ask_gemini(messages: list[dict[str, str]]):
 
+    response = _client().models.generate_content(
+        model=MODEL,
+        contents=_to_contents(messages),
+        config=types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT
+        ),
+    )
+
+    return response.text.strip()
 
 def ask_gemini_stream(messages: list[dict[str, str]]):
-    try:
-        response_stream = _client().models.generate_content_stream(
-            model=MODEL,
-            contents=_to_contents(messages),
-            config=types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT),
-        )
 
-        yielded = False
-        for chunk in response_stream:
-            chunk_text = getattr(chunk, "text", None)
-            if chunk_text:
-                yielded = True
-                yield chunk_text
+    response_stream = _client().models.generate_content_stream(
+        model=MODEL,
+        contents=_to_contents(messages),
+        config=types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT
+        ),
+    )
 
-        if not yielded:
-            yield from _stream_text(_fallback_tutor_reply(_latest_user_text(messages)))
-
-    except Exception:
-        yield from _stream_text(_fallback_tutor_reply(_latest_user_text(messages)))
-
+    for chunk in response_stream:
+        if getattr(chunk, "text", None):
+            yield chunk.text
 
 def _fallback_quiz(topic: str, difficulty: str, questions: int) -> list[dict[str, object]]:
     topic = topic.strip() or "General Knowledge"

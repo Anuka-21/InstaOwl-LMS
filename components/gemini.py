@@ -55,12 +55,15 @@ def get_ai_status() -> tuple[bool, str]:
 
 
 def _client():
+    global _persistent_client
     ready, message = get_ai_status()
 
     if not ready:
         raise AIServiceError(message)
-
-    return genai.Client(api_key=get_api_key())
+    if _persistent_client is None:
+        _persistent_client = genai.Client(api_key=get_api_key())
+        
+    return _persistent_client
 
 
 def _to_contents(messages: list[dict[str, str]]):
@@ -146,40 +149,47 @@ def _generate_text(prompt: str, *, json_mode: bool = False) -> str:
     config_kwargs = {"system_instruction": SYSTEM_PROMPT}
     if json_mode:
         config_kwargs["response_mime_type"] = "application/json"
-
-    response = _client().models.generate_content(
+    client = _client()
+    response = client.models.generate_content(
         model=MODEL,
         contents=prompt,
         config=types.GenerateContentConfig(**config_kwargs),
     )
-
     return (response.text or "").strip()
 
 
 def ask_gemini(messages: list[dict[str, str]]):
-
-    response = _client().models.generate_content(
+    client = _client()
+    response = client.models.generate_content(
         model=MODEL,
         contents=_to_contents(messages),
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT
         ),
     )
-
     return response.text.strip()
 
 def ask_gemini_stream(messages):
-
-    response = _client().models.generate_content(
-        model=MODEL,
-        contents=_to_contents(messages),
-        config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT
-        ),
-    )
-
-    yield response.text
-
+    try:
+        client = _client()
+        # Fix: Switch to generate_content_stream so st.write_stream works!
+        response_stream = client.models.generate_content_stream(
+            model=MODEL,
+            contents=_to_contents(messages),
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT
+            ),
+        )
+        
+        for chunk in response_stream:
+            if chunk.text:
+                yield chunk.text
+                
+    except Exception as e:
+        # If the API hits a wall, yield your static fallback responses gracefully
+        prompt = _latest_user_text(messages)
+        yield _fallback_tutor_reply(prompt)
+        
 def _fallback_quiz(topic: str, difficulty: str, questions: int) -> list[dict[str, object]]:
     topic = topic.strip() or "General Knowledge"
     templates = [
